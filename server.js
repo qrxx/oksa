@@ -3,12 +3,11 @@ const axios = require('axios');
 const compression = require('compression');
 const morgan = require('morgan');
 const NodeCache = require('node-cache');
-const ffmpeg = require('fluent-ffmpeg');
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Base URL template for HLS stream
-const baseUrlTemplate = 'http://146.59.54.156/{channel}/';
+const baseUrlTemplate = 'http://f852765d.akadatel.com/iptv/SDGCZKFDFCSWVE/{channel}/';
 
 // Axios instance with keep-alive
 const axiosInstance = axios.create({
@@ -58,7 +57,7 @@ app.get('/ping', (req, res) => {
 
 // Player page with Video.js
 app.get('/player', (req, res) => {
-  const channel = req.query.stream || '6027';
+  const channel = req.query.stream || '7297';
   res.set('Content-Type', 'text/html');
   res.send(`
     <!DOCTYPE html>
@@ -73,7 +72,7 @@ app.get('/player', (req, res) => {
     </head>
     <body>
       <video-js id="player" class="video-js vjs-default-skin" controls autoplay>
-        <source src="/proxy?stream=${channel}&path=mono.m3u8" type="application/x-mpegURL">
+        <source src="/proxy?stream=${channel}&path=index.m3u8" type="application/x-mpegURL">
       </video-js>
       <script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
       <script>
@@ -95,7 +94,7 @@ app.get('/player', (req, res) => {
 
 // Proxy endpoint
 app.get('/proxy', async (req, res) => {
-  const channel = req.query.stream || '6027';
+  const channel = req.query.stream || '7297';
   const path = req.query.path || '';
   const baseUrl = baseUrlTemplate.replace('{channel}', channel);
 
@@ -103,14 +102,14 @@ app.get('/proxy', async (req, res) => {
     return res.status(400).send('Missing path parameter');
   }
 
-  if (path === 'mono.m3u8') {
+  if (path === 'index.m3u8') {
     // Proxy .m3u8 with caching
     const cacheKey = `m3u8_${channel}`;
     let m3u8Content = cache.get(cacheKey);
 
     if (!m3u8Content) {
       try {
-        const response = await axiosInstance.get(`${baseUrl}mono.m3u8`);
+        const response = await axiosInstance.get(`${baseUrl}index.m3u8`);
         m3u8Content = response.data;
 
         // Rewrite .ts URLs
@@ -132,30 +131,21 @@ app.get('/proxy', async (req, res) => {
     });
     res.send(m3u8Content);
   } else if (path.endsWith('.ts')) {
-    // Proxy and transcode .ts with FFmpeg
+    // Proxy .ts with streaming
     try {
-      const streamUrl = `${baseUrl}${path}`;
+      const response = await axiosInstance({
+        method: 'get',
+        url: `${baseUrl}${path}`,
+        responseType: 'stream',
+        headers: { 'Icy-MetaData': undefined },
+      });
+
       res.set({
         'Content-Type': 'video/MP2T',
       });
-
-      ffmpeg(streamUrl)
-        .inputOptions(['-re']) // Read input at native frame rate
-        .outputOptions([
-          '-c:v libx264', // H.264 video codec
-          '-preset ultrafast', // Fast encoding
-          '-b:v 2500k', // Video bitrate: 2.5 Mbps
-          '-vf scale=1280:720:force_original_aspect_ratio=decrease', // Scale to 720p
-          '-c:a aac', // AAC audio codec
-          '-b:a 128k', // Audio bitrate: 128 kbps
-          '-f mpegts', // Output MPEG-TS format
-        ])
-        .on('error', (err) => {
-          res.status(500).send(`FFmpeg error: ${err.message}`);
-        })
-        .pipe(res, { end: true }); // Stream directly to response
+      response.data.pipe(res);
     } catch (error) {
-      res.status(500).send(`Error processing segment: ${error.message}`);
+      res.status(500).send(`Error fetching segment: ${error.message}`);
     }
   } else {
     res.status(400).send('Invalid path');
