@@ -3,7 +3,7 @@ const axios = require('axios');
 const compression = require('compression');
 const morgan = require('morgan');
 const NodeCache = require('node-cache');
-const url = require('url'); // For URL validation
+const url = require('url');
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -26,7 +26,7 @@ const axiosInstance = axios.create({
 app.use(compression());
 app.use(morgan('tiny'));
 
-// Cache for .m3u8 (15s TTL)
+// Cache for .m3u8 and segment URLs (15s TTL)
 const cache = new NodeCache({ stdTTL: 15, checkperiod: 7 });
 
 // Restrict embedding to telewizjada.xyz
@@ -106,6 +106,7 @@ app.get('/proxy', async (req, res) => {
   if (path === 'index.m3u8') {
     // Proxy .m3u8 with caching
     const cacheKey = `m3u8_${channel}`;
+    const segmentCacheKey = `segments_${channel}`;
     let m3u8Content = cache.get(cacheKey);
 
     if (!m3u8Content) {
@@ -113,15 +114,19 @@ app.get('/proxy', async (req, res) => {
         const response = await axiosInstance.get(`${baseUrl}index.m3u8`);
         m3u8Content = response.data;
 
-        // Rewrite .ts URLs to hide original source
+        // Store segment URLs in cache and rewrite .ts URLs
+        const segmentMap = {};
         m3u8Content = m3u8Content.replace(
           /^(?!#)(.*?)(\/[^\/]+\.ts.*)$/gm,
           (match, prefix, segment) => {
-            const segmentPath = segment.split('/').pop(); // Extract filename (e.g., 1744753886000.ts?md5=...)
-            return `/proxy?stream=${channel}&path=${encodeURIComponent(match)}`; // Pass full original URL
+            const segmentPath = segment.split('/').pop(); // Extract filename (e.g., 1744754326000.ts?md5=...)
+            segmentMap[segmentPath] = match; // Map filename to full URL
+            return `/proxy?stream=${channel}&path=${encodeURIComponent(segmentPath)}`;
           }
         );
 
+        // Cache the segment map and M3U8 content
+        cache.set(segmentCacheKey, segmentMap);
         cache.set(cacheKey, m3u8Content);
       } catch (error) {
         console.error(`Error fetching playlist: ${error.message}`);
@@ -138,10 +143,19 @@ app.get('/proxy', async (req, res) => {
   } else if (path.includes('.ts')) {
     // Proxy .ts with streaming
     try {
-      // Decode and validate the original segment URL
-      let originalSegmentUrl = decodeURIComponent(path);
-      
-      // Basic URL validation
+      // Look up the original segment URL in cache
+      const segmentCacheKey = `segments_${channel}`;
+      const segmentMap = cache.get(segmentCacheKey) || {};
+      const segmentPath = decodeURIComponent(path);
+      const originalSegmentUrl = segmentMap[segmentPath];
+
+      if (!originalSegmentUrl) {
+        console.error(`Segment URL not found in cache: ${segmentPath}`);
+        res.status(404).send('Segment not found');
+        return;
+      }
+
+      // Validate URL
       try {
         new url.URL(originalSegmentUrl);
       } catch (e) {
@@ -162,7 +176,7 @@ app.get('/proxy', async (req, res) => {
       });
       response.data.pipe(res);
     } catch (error) {
-      console.error(`Error fetching segment: ${error.message}, URL: ${decodeURIComponent(path)}`);
+      console.error(`Error fetching segment: ${error.message}, Path: ${path}`);
       res.status(500).send('Error fetching segment');
     }
   } else {
