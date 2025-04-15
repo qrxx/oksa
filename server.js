@@ -6,7 +6,7 @@ const NodeCache = require('node-cache');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Base URL template for HLS stream
+// Base URL template for HLS stream (for fetching index.m3u8)
 const baseUrlTemplate = 'http://f852765d.akadatel.com/iptv/SDGCZKFDFCSWVE/{channel}/';
 
 // Axios instance with keep-alive
@@ -112,10 +112,13 @@ app.get('/proxy', async (req, res) => {
         const response = await axiosInstance.get(`${baseUrl}index.m3u8`);
         m3u8Content = response.data;
 
-        // Rewrite .ts URLs
+        // Rewrite .ts URLs to hide original source
         m3u8Content = m3u8Content.replace(
-          /^(?!#).*?\.ts.*$/gm,
-          (match) => `/proxy?stream=${channel}&path=${encodeURIComponent(match)}`
+          /^(?!#)(.*?)(\/[^\/]+\.ts.*)$/gm,
+          (match, prefix, segment) => {
+            const segmentPath = segment.split('/').pop(); // Extract filename (e.g., 1744753886000.ts?md5=...)
+            return `/proxy?stream=${channel}&path=${encodeURIComponent(segmentPath)}`;
+          }
         );
 
         cache.set(cacheKey, m3u8Content);
@@ -130,12 +133,14 @@ app.get('/proxy', async (req, res) => {
       'Cache-Control': 'public, max-age=5',
     });
     res.send(m3u8Content);
-  } else if (path.endsWith('.ts')) {
+  } else if (path.endsWith('.ts') || path.includes('.ts?')) {
     // Proxy .ts with streaming
     try {
+      // Decode the path to get the original segment URL
+      const originalSegmentUrl = decodeURIComponent(path);
       const response = await axiosInstance({
         method: 'get',
-        url: `${baseUrl}${path}`,
+        url: originalSegmentUrl, // Use the full URL from the M3U8
         responseType: 'stream',
         headers: { 'Icy-MetaData': undefined },
       });
