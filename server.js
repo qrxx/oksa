@@ -3,6 +3,7 @@ const axios = require('axios');
 const compression = require('compression');
 const morgan = require('morgan');
 const NodeCache = require('node-cache');
+const ffmpeg = require('fluent-ffmpeg');
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -131,21 +132,30 @@ app.get('/proxy', async (req, res) => {
     });
     res.send(m3u8Content);
   } else if (path.endsWith('.ts')) {
-    // Proxy .ts with streaming
+    // Proxy and transcode .ts with FFmpeg
     try {
-      const response = await axiosInstance({
-        method: 'get',
-        url: `${baseUrl}${path}`,
-        responseType: 'stream',
-        headers: { 'Icy-MetaData': undefined },
-      });
-
+      const streamUrl = `${baseUrl}${path}`;
       res.set({
         'Content-Type': 'video/MP2T',
       });
-      response.data.pipe(res);
+
+      ffmpeg(streamUrl)
+        .inputOptions(['-re']) // Read input at native frame rate
+        .outputOptions([
+          '-c:v libx264', // H.264 video codec
+          '-preset ultrafast', // Fast encoding
+          '-b:v 2500k', // Video bitrate: 2.5 Mbps
+          '-vf scale=1280:720:force_original_aspect_ratio=decrease', // Scale to 720p
+          '-c:a aac', // AAC audio codec
+          '-b:a 128k', // Audio bitrate: 128 kbps
+          '-f mpegts', // Output MPEG-TS format
+        ])
+        .on('error', (err) => {
+          res.status(500).send(`FFmpeg error: ${err.message}`);
+        })
+        .pipe(res, { end: true }); // Stream directly to response
     } catch (error) {
-      res.status(500).send(`Error fetching segment: ${error.message}`);
+      res.status(500).send(`Error processing segment: ${error.message}`);
     }
   } else {
     res.status(400).send('Invalid path');
