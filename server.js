@@ -3,6 +3,7 @@ const axios = require('axios');
 const compression = require('compression');
 const morgan = require('morgan');
 const NodeCache = require('node-cache');
+const url = require('url'); // For URL validation
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -117,13 +118,14 @@ app.get('/proxy', async (req, res) => {
           /^(?!#)(.*?)(\/[^\/]+\.ts.*)$/gm,
           (match, prefix, segment) => {
             const segmentPath = segment.split('/').pop(); // Extract filename (e.g., 1744753886000.ts?md5=...)
-            return `/proxy?stream=${channel}&path=${encodeURIComponent(segmentPath)}`;
+            return `/proxy?stream=${channel}&path=${encodeURIComponent(match)}`; // Pass full original URL
           }
         );
 
         cache.set(cacheKey, m3u8Content);
       } catch (error) {
-        res.status(500).send(`Error fetching playlist: ${error.message}`);
+        console.error(`Error fetching playlist: ${error.message}`);
+        res.status(500).send('Error fetching playlist');
         return;
       }
     }
@@ -133,14 +135,24 @@ app.get('/proxy', async (req, res) => {
       'Cache-Control': 'public, max-age=5',
     });
     res.send(m3u8Content);
-  } else if (path.endsWith('.ts') || path.includes('.ts?')) {
+  } else if (path.includes('.ts')) {
     // Proxy .ts with streaming
     try {
-      // Decode the path to get the original segment URL
-      const originalSegmentUrl = decodeURIComponent(path);
+      // Decode and validate the original segment URL
+      let originalSegmentUrl = decodeURIComponent(path);
+      
+      // Basic URL validation
+      try {
+        new url.URL(originalSegmentUrl);
+      } catch (e) {
+        console.error(`Invalid segment URL: ${originalSegmentUrl}`);
+        res.status(400).send('Invalid segment URL');
+        return;
+      }
+
       const response = await axiosInstance({
         method: 'get',
-        url: originalSegmentUrl, // Use the full URL from the M3U8
+        url: originalSegmentUrl,
         responseType: 'stream',
         headers: { 'Icy-MetaData': undefined },
       });
@@ -150,7 +162,8 @@ app.get('/proxy', async (req, res) => {
       });
       response.data.pipe(res);
     } catch (error) {
-      res.status(500).send(`Error fetching segment: ${error.message}`);
+      console.error(`Error fetching segment: ${error.message}, URL: ${decodeURIComponent(path)}`);
+      res.status(500).send('Error fetching segment');
     }
   } else {
     res.status(400).send('Invalid path');
