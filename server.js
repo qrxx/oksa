@@ -29,28 +29,6 @@ app.use(morgan('tiny'));
 // Cache for .m3u8 and segment URLs (15s TTL)
 const cache = new NodeCache({ stdTTL: 15, checkperiod: 7 });
 
-// Restrict embedding to telewizjada.xyz
-app.use((req, res, next) => {
-  res.set('Access-Control-Allow-Origin', 'https://telewizjada.xyz');
-  res.set('Access-Control-Allow-Methods', 'GET');
-  res.set('Access-Control-Max-Age', '86400');
-  res.set('X-Frame-Options', 'SAMEORIGIN');
-  res.set('Content-Security-Policy', "frame-ancestors 'self' https://telewizjada.xyz");
-  next();
-});
-
-// Block VLC and direct access
-app.use((req, res, next) => {
-  const userAgent = req.headers['user-agent'] || '';
-  if (userAgent.includes('VLC') || userAgent.includes('LibVLC')) {
-    return res.status(403).send('Access denied for VLC clients');
-  }
-  if (!req.get('Referer') || !req.get('Referer').includes('telewizjada.xyz')) {
-    return res.status(403).send('Direct access not allowed. Please use embed from telewizjada.xyz');
-  }
-  next();
-});
-
 // Ping endpoint to keep server alive
 app.get('/ping', (req, res) => {
   res.status(200).send('OK');
@@ -67,8 +45,31 @@ app.get('/player', (req, res) => {
       <title>Stream Player</title>
       <link href="https://vjs.zencdn.net/8.6.1/video-js.css" rel="stylesheet" />
       <style>
-        body { margin: 0; padding: 0; background: #000; }
-        .video-js { width: 100vw; height: 100vh; }
+        html, body {
+          margin: 0;
+          padding: 0;
+          width: 100vw;
+          height: 100vh;
+          min-width: 100vw;
+          min-height: 100vh;
+          overflow: hidden; /* Prevent scrollbars */
+          overscroll-behavior: none; /* Prevent scroll bounce */
+          background: #000;
+        }
+        .video-js {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100vw !important;
+          height: 100vh !important;
+          max-width: 100vw;
+          max-height: 100vh;
+        }
+        .vjs-tech {
+          width: 100vw !important;
+          height: 100vh !important;
+          object-fit: contain; /* Ensure video fits without stretching */
+        }
       </style>
     </head>
     <body>
@@ -78,7 +79,7 @@ app.get('/player', (req, res) => {
       <script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
       <script>
         var player = videojs('player', {
-          fluid: true,
+          fluid: false, /* Disable fluid mode to respect fixed dimensions */
           responsive: true,
           playbackRates: [0.5, 1, 1.5, 2],
           html5: {
@@ -185,5 +186,5 @@ app.get('/proxy', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  console.log(`Server is running on the port ${port}`);
 });
